@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+
 
 class Settings:
     # API Configuration

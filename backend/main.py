@@ -1,16 +1,16 @@
-import os
+import uuid
 from pathlib import Path
+
+import chromadb
+import dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import dotenv
 from google import genai
-import chromadb
-import uuid
 
 env_path = Path(__file__).parent.parent / ".env"
 dotenv.load_dotenv(env_path)
 
-from config import settings
+from config import settings  # load .env before Settings reads env vars
 
 app = FastAPI(title="RAG API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
@@ -57,7 +57,7 @@ def load_documents_from_directory(directory: str):
                     document_count += 1
             
             print(f"  Added {len(paragraphs)} chunks from {file_path.name}")
-        except Exception as e:
+        except (OSError, UnicodeDecodeError, ValueError) as e:
             print(f"Error processing {file_path}: {e}")
     
     return document_count
@@ -75,14 +75,14 @@ def health_check():
         models_list = list(gemini_client.models.list())
         gemini_ok = len(models_list) > 0
         print(f"Gemini API connected, {len(models_list)} models available")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Gemini health check failed: {e}")
     
     try:
         # Get document count from ChromaDB
         doc_count = collection.count()
         print(f"Document count: {doc_count}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"ChromaDB count failed: {e}")
         doc_count = 0
     
@@ -112,9 +112,11 @@ def ingest_documents():
             "message": f"Successfully ingested {count} document chunks",
             "documents_added": count
         }
-    except Exception as e:
+    except HTTPException:
+        raise
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as e:
         print(f"Ingestion error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/ask")
 def ask_question(request: dict):
@@ -174,7 +176,9 @@ Question: {question}"""
             "sources": sources,
             "confidence": confidence
         }
-    
-    except Exception as e:
+
+    except HTTPException:
+        raise
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as e:
         print(f"Ask error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

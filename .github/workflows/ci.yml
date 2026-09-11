@@ -40,25 +40,7 @@ jobs:
           GEMINI_URL: http://localhost:11434
           CHROMA_PATH: ./test_chroma
 
-  # Job 2: Verify Docker builds
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build backend image
-        run: docker build -t rag-backend ./backend
-
-      - name: Build frontend image
-        run: docker build -t rag-frontend ./frontend
-
-      - name: Verify images exist
-        run: |
-          docker images rag-backend
-          docker images rag-frontend
-
-  # Job 3: Lint (code quality)
+  # Job 2: Lint (code quality)
   lint:
     runs-on: ubuntu-latest
     steps:

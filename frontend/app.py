@@ -1,6 +1,7 @@
-import streamlit as st
-import requests
 import os
+
+import requests
+import streamlit as st
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
@@ -11,10 +12,10 @@ with st.sidebar:
     st.title("🤖 RAG Assistant")
     try:
         health = requests.get(f"{API_URL}/health", timeout=3).json()
-        st.success(f"API: Connected")
+        st.success("API: Connected")
         st.write(f"Gemini: {health.get('gemini', 'unknown')}")
         st.metric("Documents", health.get('documents', 0))
-    except:
+    except (requests.RequestException, ValueError):
         st.error("API not available")
 
     if st.button("🔄 Re-index Documents"):
@@ -26,8 +27,8 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.error(f"Error {r.status_code}: {r.text}")
-        except Exception as e:
-            st.error(f"Ingestion failed: {str(e)}")
+        except (requests.RequestException, ValueError) as e:
+            st.error(f"Ingestion failed: {e!s}")
 
 # --- Chat Interface ---
 st.title("Ask Your Documents")
@@ -48,27 +49,26 @@ if prompt := st.chat_input("Ask a question about your documents..."):
     with st.chat_message("user"):
         st.write(prompt)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                r = requests.post(f"{API_URL}/ask", json={"question": prompt}, timeout=30)
-                if r.status_code == 200:
-                    data = r.json()
-                    st.write(data["answer"])
+    with st.chat_message("assistant"), st.spinner("Thinking..."):
+        try:
+            r = requests.post(f"{API_URL}/ask", json={"question": prompt}, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                st.write(data["answer"])
 
-                    sources = data.get("sources", [])
-                    if sources:
-                        with st.expander(f"Sources ({data.get('confidence', 'unknown')} confidence)"):
-                            for s in sources:
-                                st.caption(f"{s['source']} (dist: {s['distance']:.3f})")
-                                st.write(s['text'][:200] + "...")
+                sources = data.get("sources", [])
+                if sources:
+                    with st.expander(f"Sources ({data.get('confidence', 'unknown')} confidence)"):
+                        for s in sources:
+                            st.caption(f"{s['source']} (dist: {s['distance']:.3f})")
+                            st.write(s['text'][:200] + "...")
 
-                    st.session_state["messages"].append({
-                        "role": "assistant",
-                        "content": data["answer"],
-                        "sources": sources
-                    })
-                else:
-                    st.error(f"Error {r.status_code}: {r.text}")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.session_state["messages"].append({
+                    "role": "assistant",
+                    "content": data["answer"],
+                    "sources": sources
+                })
+            else:
+                st.error(f"Error {r.status_code}: {r.text}")
+        except (requests.RequestException, ValueError) as e:
+            st.error(f"Error: {e!s}")
