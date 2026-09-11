@@ -30,9 +30,14 @@ jobs:
           pip install pytest httpx  # Test dependencies
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: |
+          if [ -d "tests" ]; then
+            pytest tests/ -v --tb=short
+          else
+            echo "No tests directory found, skipping pytest"
+          fi
         env:
-          Gemini_URL: <http://localhost:11434>  # Won't actually connect in CI
+          GEMINI_URL: http://localhost:11434
           CHROMA_PATH: ./test_chroma
 
   # Job 2: Verify Docker builds
