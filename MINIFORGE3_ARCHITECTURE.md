@@ -8,6 +8,7 @@ This project demonstrates a **multi-component RAG (Retrieval-Augmented Generatio
 - **Frontend**: Streamlit web interface for document ingestion and Q&A
 - **Database**: ChromaDB persistent vector storage
 - **AI Engine**: Google Gemini API for document understanding and response generation
+- **CI**: GitHub Actions for tests and Ruff lint (no Docker image builds)
 
 ---
 
@@ -17,16 +18,19 @@ This project demonstrates a **multi-component RAG (Retrieval-Augmented Generatio
 **Lesson:** Create a project directory with proper structure
 **Implementation:** ✅ MEETS
 ```
-RAG Project with Environment Management & Configuration/
-├── .env                                # Environment variables (root level)
+Containerizing-RAG-Application/
+├── .env                                # Environment variables (gitignored, project root)
+├── .github/workflows/ci.yml            # GitHub Actions: test + lint
 ├── MINIFORGE3_ARCHITECTURE.md          # This documentation
+├── tests/
+│   └── test_api.py                     # API smoke tests (repo root)
 ├── backend/
-│   ├── main.py                        # FastAPI RAG application
-│   ├── config.py                      # Settings configuration
+│   ├── main.py                         # FastAPI RAG application
+│   ├── config.py                       # Settings configuration
 │   ├── requirements.txt                # Python dependencies
-│   ├── chroma_db/                     # Persistent vector database
+│   ├── chroma_db/                      # Persistent vector database
 │   │   └── chroma.sqlite3
-│   └── docs/                          # Document collection
+│   └── docs/                           # Document collection
 │       ├── embeddings-and-vectors.txt
 │       ├── fastapi.txt
 │       ├── llms-and-ai.txt
@@ -35,11 +39,12 @@ RAG Project with Environment Management & Configuration/
 │       ├── rest-apis.txt
 │       ├── sql-databases.txt
 │       └── streamlit.txt
-├── frontend/
-│   ├── app.py                         # Streamlit interface
-│   └── requirements.txt                # Frontend dependencies
-└── venv/                               # Python virtual environment
+└── frontend/
+    ├── app.py                          # Streamlit interface
+    └── requirements.txt                # Frontend dependencies
 ```
+
+There is **no Dockerfile** and **no docker-compose.yml**. Local runtime is a Miniforge3 conda environment (`rag-env`), not a `venv/` directory or containers.
 
 ---
 
@@ -50,8 +55,8 @@ RAG Project with Environment Management & Configuration/
 | Lesson Model | Miniforge3 Model | Outcome |
 |---|---|---|
 | Backend container + Ollama container | Backend process + Google Gemini API | Two independent systems communicating |
-| Services managed by docker-compose | Services managed by developer with uvicorn | Explicit startup/shutdown |
-| Inter-container networking | Direct API calls | Services still separate |
+| Services managed by docker-compose | Services managed by developer with uvicorn / Streamlit | Explicit startup/shutdown |
+| Inter-container networking | Direct HTTP / API calls | Services still separate |
 
 ---
 
@@ -60,43 +65,49 @@ RAG Project with Environment Management & Configuration/
 **Implementation:** ✅ MEETS
 
 **Miniforge3 Setup:**
-- `.env` file in the root directory contains `Gemini_API_Key` and other configuration
-- `main.py` loads the `.env` file via `python-dotenv` **before** importing config module
-- Service discovery via direct API configuration (not network-based)
+- A single `.env` file at the **project root** holds `Gemini_API_Key` and other configuration (listed in `.gitignore`)
+- `backend/main.py` loads that file with `python-dotenv` **before** importing settings
+- Settings live in `backend/config.py` (`Settings` reads `os.getenv` / `os.environ` at import time)
+- Service discovery is direct API configuration (Gemini cloud API), not Docker network names
 
 ```python
-# main.py - CORRECT ORDER: Load .env BEFORE importing config
-import os
+# backend/main.py — load .env BEFORE importing Settings
 from pathlib import Path
-import dotenv
-from google import genai
-import chromadb
 
-# Load from root .env file BEFORE importing config
+import dotenv
+
 env_path = Path(__file__).parent.parent / ".env"
 dotenv.load_dotenv(env_path)
 
-from config import settings  # Environment variables now available
+from backend.config import settings  # environment variables now available
 ```
 
-**Important:** The `.env` file must be loaded **before** the config module is imported. This ensures environment variables are available when `Settings()` is instantiated.
+**Important:** The `.env` file must be loaded **before** `Settings()` runs inside `config.py`. That is why the import is delayed until after `load_dotenv`.
 
-**.env file (in root directory):**
+Because the app imports `backend.config` and `backend.main`, start Uvicorn from the **project root** (so the `backend` package resolves):
+
+```bash
+conda activate rag-env
+uvicorn backend.main:app --reload --port 8000
+```
+
+**.env file (project root):**
 ```
 Gemini_API_Key=your-api-key-here
-MODEL=gemini-2.0-flash
+MODEL=gemini-3.6-flash
 CHROMA_PATH=./backend/chroma_db
 COLLECTION_NAME=documents
 MAX_RESULTS=5
 CONFIDENCE_THRESHOLD=1.0
 DEBUG=true
-DOCS_DIRECTORY=./docs
+DOCS_DIRECTORY=./backend/docs
 ```
 
-**Path Configuration Notes:**
-- `CHROMA_PATH=./backend/chroma_db` - Relative path to ChromaDB storage (from backend working directory)
-- `DOCS_DIRECTORY=./docs` - Relative path to documents folder (from backend working directory when running uvicorn)
-- When running uvicorn from the backend directory, these paths correctly resolve to the local filesystem
+**Path configuration (`backend/config.py`):**
+- `CHROMA_DB_PATH` prefers `CHROMA_DB_PATH`, then `CHROMA_PATH`, then `"chroma_db"`
+- `DOCS_DIRECTORY` defaults to `backend/docs` next to `config.py` if unset
+- `MODEL` defaults to `gemini-3.6-flash`
+- Use filesystem paths, not Docker paths such as `/app/chroma_data`
 
 ---
 
@@ -106,17 +117,16 @@ DOCS_DIRECTORY=./docs
 
 **Miniforge3 Implementation:**
 ```python
-# Persistent ChromaDB stored on local filesystem
-db_client = chromadb.PersistentClient(path="chroma_db")
-collection = client.get_or_create_collection("documents")
+db_client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+collection = client.get_or_create_collection(settings.COLLECTION_NAME)
 ```
 
 **Persistence Testing:**
-1. Start backend with uvicorn
-2. Create/upload documents to ChromaDB
-3. Stop uvicorn process (Ctrl+C)
+1. Start backend with uvicorn from the project root
+2. Ingest documents into ChromaDB (`POST /ingest` or the Streamlit button)
+3. Stop uvicorn (Ctrl+C)
 4. Restart uvicorn
-5. Query `/health` endpoint - document count preserved ✅
+5. Query `/health` — document count is preserved ✅
 
 ---
 
@@ -125,17 +135,38 @@ collection = client.get_or_create_collection("documents")
 **Implementation:** ✅ MEETS
 
 **Endpoints:**
-- `GET /health` - Tests Gemini API connectivity
-- `GET /` - Returns API status and model info
+- `GET /health` — Gemini connectivity (model list) and ChromaDB document count
+- `GET /` — API status and model name
+
+Health checks catch unexpected Gemini/ChromaDB errors so `/health` still returns JSON instead of crashing (`# noqa: BLE001` for Ruff).
 
 ```json
 {
   "status": "healthy",
   "gemini": "connected",
-  "model": "gemini-2.0-flash",
+  "model": "gemini-3.6-flash",
   "documents": 5
 }
 ```
+
+---
+
+### ✅ Requirement 6: CI without Docker
+**Lesson (typical):** Build/verify container images in CI
+**Implementation:** ✅ MEETS intent (quality gates without Docker)
+
+This machine cannot install Docker, and the repo has no Dockerfiles. GitHub Actions therefore does **not** run `docker build`.
+
+Workflow: `.github/workflows/ci.yml` on `push` / `pull_request` to `main`.
+
+| Job | What it does |
+|---|---|
+| **test** | Python 3.12, install `backend/requirements.txt`, run pytest if `backend/tests/` exists |
+| **lint** | Install Ruff and `ruff check backend/ frontend/` |
+
+A previous **docker** job failed with `open Dockerfile: no such file or directory` and was removed. Runners still have Docker; this project simply does not use it.
+
+**Note:** Smoke tests currently live at repo-root `tests/test_api.py` (`from backend.main import app`). The workflow’s working directory is `./backend` and it only runs pytest when `backend/tests/` exists, so those root tests are skipped until the paths are aligned.
 
 ---
 
@@ -144,10 +175,11 @@ collection = client.get_or_create_collection("documents")
 | Principle | Purpose | Miniforge3 Implementation |
 |---|---|---|
 | **Separation of Concerns** | Backend handles business logic, external service handles AI | FastAPI backend + Gemini API |
-| **Configuration Management** | Secrets not in code | `.env` + `python-dotenv` |
-| **Data Persistence** | Data survives process restarts | ChromaDB persistent storage |
+| **Configuration Management** | Secrets not in code | Root `.env` + `python-dotenv` + `config.py` |
+| **Data Persistence** | Data survives process restarts | ChromaDB on the local filesystem |
 | **Health Monitoring** | Can verify system connectivity | `/health` endpoint |
-| **Scalability Readiness** | Architecture can be containerized later | Already API-first design |
+| **Quality gates** | Catch regressions without local Docker | GitHub Actions test + Ruff |
+| **Scalability Readiness** | Architecture can be containerized later | API-first design; no Docker required to learn the pattern |
 
 ---
 
@@ -155,13 +187,14 @@ collection = client.get_or_create_collection("documents")
 
 | Aspect | Docker Compose | Miniforge3 |
 |---|---|---|
-| Service orchestration | `docker-compose up` | `uvicorn main:app --reload` |
-| Isolation | Container-based | Process-based |
-| Port mapping | docker-compose.yml | uvicorn `--port` flag |
-| Volume management | Named volumes | File system paths |
-| Service dependencies | `depends_on` directive | Manual startup order |
+| Service orchestration | `docker-compose up` | `uvicorn` + `streamlit run` |
+| Isolation | Container-based | Process-based (conda `rag-env`) |
+| Port mapping | docker-compose.yml | uvicorn `--port` / Streamlit default 8501 |
+| Volume management | Named volumes | File system paths (`CHROMA_PATH`) |
+| Service dependencies | `depends_on` | Manual startup order (backend first) |
+| CI image builds | `docker build` | Omitted (no Dockerfiles) |
 
-**Key Point:** Both approaches achieve the **same architectural goals** - separation of services, configuration management, and data persistence. The lesson's core concepts are fully demonstrated.
+**Key Point:** Both approaches achieve the **same architectural goals** — separation of services, configuration management, and data persistence. The lesson's core concepts are fully demonstrated.
 
 ---
 
@@ -169,29 +202,24 @@ collection = client.get_or_create_collection("documents")
 
 **To verify data persistence meets lesson standards:**
 
-1. **Start the backend from the root directory:**
+1. **Start the backend from the project root:**
    ```bash
    conda activate rag-env
    uvicorn backend.main:app --reload --port 8000
    ```
 
-2. **Add documents via your frontend or API calls**
+2. **Add documents via the frontend or `POST /ingest`**
 
 3. **Check document count:**
    ```bash
    curl http://localhost:8000/health
-   # Returns: {"status": "healthy", "gemini": "connected", "model": "gemini-2.0-flash", "documents": 5}
    ```
 
 4. **Stop the backend:** `Ctrl+C`
 
 5. **Restart the backend** (same command as step 1)
 
-6. **Verify documents persisted:**
-   ```bash
-   curl http://localhost:8000/health
-   # Returns: {"status": "healthy", "gemini": "connected", "model": "gemini-2.0-flash", "documents": 5}
-   ```
+6. **Verify documents persisted** with the same `curl` to `/health`
 
 ✅ **Document count preserved** = Persistence working correctly
 
@@ -205,6 +233,7 @@ collection = client.get_or_create_collection("documents")
 3. ✅ Proving data persistence across application restarts
 4. ✅ Showing service communication & health monitoring
 5. ✅ Following best practices (API-first, separation of concerns)
+6. ✅ Adding CI (pytest hook + Ruff) without requiring Docker locally
 
 **Limitation:** Does not use Docker containers, but demonstrates Docker-ready architecture using cloud APIs instead of local Ollama.
 
@@ -214,90 +243,60 @@ collection = client.get_or_create_collection("documents")
 
 ## Recent Implementation Updates & Best Practices
 
+### GitHub Actions: Docker job removed; lint/test kept
+**Issue:** CI failed with `failed to read dockerfile: open Dockerfile: no such file or directory` on `docker build -t rag-backend ./backend`.
+
+**Root Cause:** The workflow assumed Dockerfiles under `backend/` and `frontend/`. This project never added them because Docker cannot be installed on the development machine.
+
+**Solution:** Dropped the `docker` job. Remaining jobs: **test** and **lint**.
+
+### Ruff lint (code quality)
+**Issue:** The lint job failed with unsorted imports, unused imports, bare/`Exception` catches, and small style rules (F541, RUF010, SIM117).
+
+**Solution:**
+- Sorted imports (isort / Ruff `I001`); removed unused `os` / `Path` where applicable
+- Document loading uses `(OSError, UnicodeDecodeError, ValueError)`
+- `/ingest` and `/ask` re-raise `HTTPException`, then catch a narrower set of errors and return HTTP 500
+- `/health` still catches `Exception` so connectivity failures do not take down the endpoint
+- Streamlit uses `requests.RequestException` / `ValueError` instead of bare `except` or blanket `Exception`
+- Combined Streamlit `with st.chat_message(...), st.spinner(...)`
+
 ### Environment Variable Loading Order (Critical Fix)
 **Issue:** `ModuleNotFoundError: No module named 'backend'` and `ValueError: Gemini_API_Key not found`
 
-**Root Cause:** The config module was being imported before environment variables were loaded, causing the `Settings` class to initialize with empty values.
+**Root Cause:** Settings were imported before `.env` was loaded, or Uvicorn was started in a way that the `backend` package did not resolve.
 
-**Solution Implemented:**
-```python
-# ✅ CORRECT: Load .env BEFORE importing config
-import os
-from pathlib import Path
-import dotenv
-
-# Load from backend/.env BEFORE config import
-env_path = Path(__file__).parent / ".env"
-dotenv.load_dotenv(dotenv_path=env_path)
-
-# NOW import config (variables are available)
-from config import settings
-```
-
-**Key Principle:** Environment variables must be loaded **before** any module that depends on them is imported.
+**Solution Implemented:** Load the **root** `.env` first, then import settings; run Uvicorn as `backend.main:app` from the repo root.
 
 ### Fixed ChromaDB Read-Only Filesystem Error
 **Issue:** `chromadb.errors.InternalError: Read-only file system (os error 30)`
 
-**Root Cause:** `.env` file had Docker container paths that don't exist locally:
-- `CHROMA_PATH=/app/chroma_data` (container path, not on local machine)
-- `DOCS_DIRECTORY=/backend/docs` (malformed, causing double "backend" in path)
+**Root Cause:** `.env` still had Docker container paths:
+- `CHROMA_PATH=/app/chroma_data`
+- `DOCS_DIRECTORY=/backend/docs`
 
-**Solution:** Updated `.env` to use relative paths from backend working directory:
-```
-CHROMA_PATH=./backend/chroma_db  ❌ OLD: /app/chroma_data
-DOCS_DIRECTORY=./docs             ❌ OLD: /backend/docs
-```
+**Solution:** Relative local paths (`CHROMA_PATH=./backend/chroma_db`, docs under `backend/docs`). Persistence uses `settings.CHROMA_DB_PATH`, not a hardcoded folder name only.
 
 ### Fixed Document Ingestion Endpoint
-**Issue:** `POST /ingest` endpoint returned 500 error on first call with empty collection
+**Issue:** `POST /ingest` returned 500 on an empty collection
 
-**Root Cause:** Collection clearing logic didn't handle empty collections:
-```python
-# ❌ OLD CODE - Fails when collection is empty
-collection.delete(collection.get()["ids"])  # KeyError if no "ids" key
-```
+**Root Cause:** `collection.delete(collection.get()["ids"])` when `"ids"` was missing.
 
-**Solution:** Added proper null checking:
-```python
-# ✅ NEW CODE - Handles empty collections
-existing = collection.get()
-if existing and existing.get("ids"):
-    collection.delete(existing["ids"])
-    print(f"Cleared {len(existing['ids'])} existing documents")
-else:
-    print("Collection is empty, no documents to clear")
-```
+**Solution:** Guard with `existing and existing.get("ids")` before delete.
 
 ### Fixed Streamlit Frontend API Connection
-**Issue:** Streamlit app failed with `No connection adapters were found for '[http://localhost:8000]/ingest'`
+**Issue:** `No connection adapters were found for '[http://localhost:8000]/ingest'`
 
-**Root Cause:** API_URL had malformed angle brackets:
-```python
-# ❌ OLD CODE
-API_URL = os.environ.get("API_URL", "<http://localhost:8000>")
-# Results in: "<http://localhost:8000>" (invalid URL)
-```
+**Root Cause:** Default `API_URL` included markdown-style angle brackets.
 
-**Solution:** Removed angle brackets:
-```python
-# ✅ NEW CODE
-API_URL = os.environ.get("API_URL", "http://localhost:8000")
-```
+**Solution:** `API_URL = os.environ.get("API_URL", "http://localhost:8000")`
 
-### Improved Error Handling in Frontend
-**Enhancement:** Added detailed error messages and status code logging:
+### Frontend HTTP error handling
+Network failures are caught as `requests.RequestException` (and JSON errors as `ValueError`) so Ruff `E722` / `BLE001` stay clean while the UI still shows a useful message:
+
 ```python
-# ✅ IMPROVED ERROR HANDLING
-try:
-    r = requests.post(f"{API_URL}/ingest", timeout=30)
-    if r.status_code == 200:
-        data = r.json()
-        st.success(data.get("message", "Done"))
-    else:
-        st.error(f"Error {r.status_code}: {r.text}")  # Show actual error
-except Exception as e:
-    st.error(f"Ingestion failed: {str(e)}")  # Show detailed exception
+except (requests.RequestException, ValueError) as e:
+    st.error(f"Ingestion failed: {e!s}")
 ```
 
 ---
@@ -326,62 +325,43 @@ except Exception as e:
 
 **Running the Frontend:**
 ```bash
+conda activate rag-env
 cd frontend
 streamlit run app.py
 ```
 
-Frontend will be available at `http://localhost:8501` and communicates with backend at `http://localhost:8000` (configurable via API_URL environment variable).
-
----
-
-### Separated Environment Files
-**Benefit:** Backend and frontend can have different configurations without conflicts.
-
-- **backend/.env** - Backend-specific variables (Gemini API key, ChromaDB paths, etc.)
-- **.env** (root) - Frontend-specific variables (if needed)
-
-This follows the principle of **separation of concerns** and prevents accidental loading of frontend configs into the backend.
-
-### Relative Import Paths
-**Implementation:**
-```python
-# Using Path(__file__).parent ensures the .env is loaded relative to main.py
-env_path = Path(__file__).parent / ".env"
-dotenv.load_dotenv(dotenv_path=env_path)
-```
-
-**Advantage:** Works regardless of which directory you run `uvicorn` from, making the application more portable and Docker-ready.
+Frontend is at `http://localhost:8501` and talks to `http://localhost:8000` (override with `API_URL`).
 
 ---
 
 ## Running the Application
 
-**Start the backend:**
+**Start the backend (project root):**
 ```bash
-cd backend
 conda activate rag-env
-uvicorn main:app --reload --port 8000
+uvicorn backend.main:app --reload --port 8000
 ```
 
-**Start the frontend (in a new terminal):**
+**Start the frontend (new terminal):**
 ```bash
+conda activate rag-env
 cd frontend
 streamlit run app.py
 ```
 
 **Verify setup:**
-1. Backend should be running on `http://localhost:8000`
-2. Frontend should be running on `http://localhost:8501`
-3. Check backend connectivity: `curl http://localhost:8000/health`
-4. Expected response: `{"status": "healthy", "gemini": "connected", ...}`
-5. In Streamlit UI, you should see "API: Connected" in the sidebar
+1. Backend: `http://localhost:8000`
+2. Frontend: `http://localhost:8501`
+3. `curl http://localhost:8000/health`
+4. Expected JSON includes `"status": "healthy"` and Gemini / document fields
+5. Streamlit sidebar should show "API: Connected"
 
 **Using the Application:**
 1. Open frontend at `http://localhost:8501`
-2. Click "🔄 Re-index Documents" in sidebar to load documents into ChromaDB
-3. Wait for confirmation message
-4. Type questions in the chat input
-5. View AI responses with source citations
+2. Click "🔄 Re-index Documents" in the sidebar
+3. Wait for confirmation
+4. Type questions in chat
+5. View answers with source citations
 
 ---
 
@@ -398,7 +378,7 @@ Returns backend and AI service connectivity status.
 {
   "status": "healthy",
   "gemini": "connected",
-  "model": "gemini-2.0-flash",
+  "model": "gemini-3.6-flash",
   "documents": 8
 }
 ```
@@ -418,8 +398,8 @@ Loads all `.txt` files from the docs directory and indexes them in ChromaDB.
 ```
 
 **Process:**
-1. Clears existing documents from collection
-2. Scans docs directory for `.txt` files
+1. Clears existing documents from the collection when IDs exist
+2. Scans the docs directory for `.txt` files
 3. Splits documents into paragraphs
 4. Embeds and stores in ChromaDB
 
@@ -433,7 +413,7 @@ Content-Type: application/json
 }
 ```
 
-Returns AI-generated answer with source citations.
+Returns an AI-generated answer with source citations.
 
 **Response:**
 ```json
@@ -450,5 +430,3 @@ Returns AI-generated answer with source citations.
   "confidence": "high"
 }
 ```
-
----
