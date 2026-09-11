@@ -10,7 +10,7 @@ from google import genai
 env_path = Path(__file__).parent.parent / ".env"
 dotenv.load_dotenv(env_path)
 
-from config import settings  # load .env before Settings reads env vars
+from backend.config import settings  # load .env before Settings reads env vars
 
 app = FastAPI(title="RAG API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
@@ -92,6 +92,16 @@ def health_check():
         "model": MODEL,
         "documents": doc_count
     }
+
+@app.get("/stats")
+def get_stats():
+    """Get statistics about the document collection"""
+    try:
+        doc_count = collection.count()
+        return {"documents": doc_count}
+    except Exception as e:
+        print(f"Error fetching stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/ingest")
 def ingest_documents():
